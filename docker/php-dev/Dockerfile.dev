@@ -1,0 +1,48 @@
+# This Dockerfile is only for testing purposes
+# This is not a prod ready asset
+
+FROM php:8.1
+
+#
+# ENV variables
+#
+
+# For NPM to avoid write on / in docker test pod instance
+# Without this, npm try to create /.npm and other stuff
+# Set it in /tmphome
+ENV npm_config_cache=/tmphome/.npm
+ENV HOME=/tmphome
+
+#
+# System installs and compiling
+#
+
+# Avoid default use our php.ini conf
+RUN rm /usr/local/etc/php/php.ini-development /usr/local/etc/php/php.ini-production
+COPY docker/php-dev/php.ini /usr/local/etc/php/php.ini
+
+# https://getcomposer.org/doc/00-intro.md
+COPY --from=composer/composer:latest-bin /composer /usr/bin/composer
+
+RUN apt update
+RUN apt install -y nodejs npm libldap2-dev libzip-dev watch git
+
+RUN docker-php-ext-configure ldap
+RUN docker-php-ext-install zip ldap
+RUN docker-php-ext-enable zip ldap
+
+# Use version number to avoid being on latest, update when you need
+# https://pecl.php.net/package/xdebug
+# https://xdebug.org/docs/compat
+RUN pecl install xdebug-3.5.0
+RUN docker-php-ext-enable xdebug
+
+#
+# App packages and library pre-install
+#
+
+RUN mkdir -p /tmphome /tmphome/.config/composer
+
+# Here setup composer globaly and avoid download packages all the other times
+COPY composer.json composer.lock /tmphome/.config/composer
+RUN sh -c "cd ; composer global install"

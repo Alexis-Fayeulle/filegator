@@ -1,0 +1,196 @@
+name: CI Pipeline (Build & Test)
+
+on:
+  push:
+    branches: [ "master", "main", "dev-*" ]
+  pull_request:
+    branches: [ "master", "main", "dev-*" ]
+
+env:
+  REGISTRY: ghcr.io
+  # Need to remove upper case in this but here it's impossible
+  FULL_IMAGE_NAME: ghcr.io/${{ github.repository }}/php-dev:${{ github.sha }}
+  DOCKER_RUN: docker run --rm -v ${{ github.workspace }}:/app -w /app -u $(id -u):$(id -g) 
+
+jobs:
+  build-dev-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Mandatory step!
+      - name: Lowercase Image Name
+        run: |
+          echo "FULL_IMAGE_NAME_LOWER=${FULL_IMAGE_NAME,,}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/php-dev/Dockerfile.dev
+          push: true
+          tags: ${{ env.FULL_IMAGE_NAME_LOWER }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  backend-test-coverage:
+    needs: build-dev-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mandatory step!
+      - name: Lowercase Image Name
+        run: |
+          echo "FULL_IMAGE_NAME_LOWER=${FULL_IMAGE_NAME,,}" >> $GITHUB_ENV
+
+      - name: Pull Docker Image
+        run: docker pull ${{ env.FULL_IMAGE_NAME_LOWER }}
+
+      - name: Install Dependencies
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "composer --quiet install"
+
+      - name: Run PHPUnit Coverage
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "\
+            mkdir -p private/tmp && chmod 775 private/tmp && \
+            php -d xdebug.mode=coverage vendor/bin/phpunit --coverage-html private/tmp/coverage; \
+          "
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        if: '!cancelled()'
+        with:
+          name: php-coverage
+          path: private/tmp/coverage
+          retention-days: 1
+
+  backend-code-quality-phpcs:
+    needs: build-dev-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mandatory step!
+      - name: Lowercase Image Name
+        run: |
+          echo "FULL_IMAGE_NAME_LOWER=${FULL_IMAGE_NAME,,}" >> $GITHUB_ENV
+
+      - name: Pull Docker Image
+        run: docker pull ${{ env.FULL_IMAGE_NAME_LOWER }}
+
+      - name: Install Dependencies
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "composer --quiet install"
+
+      - name: Run PHP CS
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "\
+            mkdir -p private/tmp && chmod 775 private/tmp && \
+            php vendor/bin/php-cs-fixer fix --dry-run --verbose --diff > private/tmp/phpcs.log \
+          "
+
+      - name: Upload PHP CS Report
+        uses: actions/upload-artifact@v4
+        if: '!cancelled()'
+        with:
+          name: phpcs
+          path: private/tmp/phpcs.log
+          retention-days: 1
+
+  backend-code-quality-phpstan:
+    needs: build-dev-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mandatory step!
+      - name: Lowercase Image Name
+        run: |
+          echo "FULL_IMAGE_NAME_LOWER=${FULL_IMAGE_NAME,,}" >> $GITHUB_ENV
+
+      - name: Pull Docker Image
+        run: docker pull ${{ env.FULL_IMAGE_NAME_LOWER }}
+
+      - name: Install Dependencies
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "composer --quiet install"
+
+      - name: Run PHPstan
+        run: |
+          ${{ env.DOCKER_RUN }} \
+          ${{ env.FULL_IMAGE_NAME_LOWER }} \
+          sh -c "\
+            mkdir -p private/tmp && chmod 775 private/tmp && \
+            php vendor/bin/phpstan analyse ./backend > private/tmp/phpstan.log \
+          "
+
+      - name: Upload PHPstan Report
+        uses: actions/upload-artifact@v4
+        if: '!cancelled()'
+        with:
+          name: phpstan
+          path: private/tmp/phpstan.log
+          retention-days: 1
